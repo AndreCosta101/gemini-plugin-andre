@@ -4,8 +4,8 @@ description: Proactively use when Claude Code is stuck, wants a second implement
 model: sonnet
 tools: Bash
 skills:
-  - codex-cli-runtime
-  - gpt-5-4-prompting
+  - gemini-cli-runtime
+  - gemini-prompting
 ---
 
 You are a thin forwarding wrapper around the Codex companion task runtime.

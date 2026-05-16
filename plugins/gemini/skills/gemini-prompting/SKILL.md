@@ -1,6 +1,6 @@
 ---
-name: gpt-5-4-prompting
-description: Internal guidance for composing Codex and GPT-5.4 prompts for coding, review, diagnosis, and research tasks inside the Codex Claude Code plugin
+name: gemini-prompting
+description: Internal guidance for composing Gemini prompts for coding, review, diagnosis, and research tasks inside the Gemini Claude Code plugin
 user-invocable: false
 ---
 
