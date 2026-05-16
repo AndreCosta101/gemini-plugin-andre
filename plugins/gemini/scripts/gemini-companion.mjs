@@ -8,27 +8,20 @@ import { fileURLToPath } from "node:url";
 
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
-    buildPersistentTaskThreadName,
-    DEFAULT_CONTINUE_PROMPT,
-    findLatestTaskThread,
-    getCodexAuthStatus,
-    getCodexAvailability,
-    getSessionRuntimeStatus,
-    interruptAppServerTurn,
-    parseStructuredOutput,
-    readOutputSchema,
-    runAppServerReview,
-    runAppServerTurn
-  } from "./lib/gemini.mjs";
+  buildPersistentTaskThreadName,
+  DEFAULT_CONTINUE_PROMPT,
+  findLatestTaskThread,
+  getGeminiAuthStatus,
+  getGeminiAvailability,
+  getSessionRuntimeStatus,
+  interruptGeminiTurn,
+  runGeminiTask
+} from "./lib/gemini.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
-import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
   generateJobId,
-  getConfig,
   listJobs,
-  setConfig,
   upsertJob,
   writeJobFile
 } from "./lib/state.mjs";
@@ -52,44 +45,38 @@ import {
 } from "./lib/tracked-jobs.mjs";
 import { resolveWorkspaceRoot } from "./lib/workspace.mjs";
 import {
-  renderNativeReviewResult,
-  renderReviewResult,
-  renderStoredJobResult,
   renderCancelReport,
   renderJobStatusReport,
   renderSetupReport,
   renderStatusReport,
+  renderStoredJobResult,
   renderTaskResult
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
-const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
-const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
-const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
+
+// --------- shared helpers ---------
 
 function printUsage() {
   console.log(
     [
       "Usage:",
-      "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
-      "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
-      "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
-      "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
-      "  node scripts/codex-companion.mjs result [job-id] [--json]",
-      "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
+      "  node scripts/gemini-companion.mjs setup [--json]",
+      "  node scripts/gemini-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model>] [prompt]",
+      "  node scripts/gemini-companion.mjs status [job-id] [--all] [--json]",
+      "  node scripts/gemini-companion.mjs result [job-id] [--json]",
+      "  node scripts/gemini-companion.mjs cancel [job-id] [--json]"
     ].join("\n")
   );
 }
 
 function outputResult(value, asJson) {
   if (asJson) {
-    console.log(JSON.stringify(value, null, 2));
+    process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
   } else {
-    process.stdout.write(value);
+    process.stdout.write(typeof value === "string" ? value : `${value}\n`);
   }
 }
 
@@ -97,56 +84,19 @@ function outputCommandResult(payload, rendered, asJson) {
   outputResult(asJson ? payload : rendered, asJson);
 }
 
-function normalizeRequestedModel(model) {
-  if (model == null) {
-    return null;
-  }
-  const normalized = String(model).trim();
-  if (!normalized) {
-    return null;
-  }
-  return MODEL_ALIASES.get(normalized.toLowerCase()) ?? normalized;
-}
-
-function normalizeReasoningEffort(effort) {
-  if (effort == null) {
-    return null;
-  }
-  const normalized = String(effort).trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  if (!VALID_REASONING_EFFORTS.has(normalized)) {
-    throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
-    );
-  }
-  return normalized;
-}
-
 function normalizeArgv(argv) {
-  if (argv.length === 1) {
-    const [raw] = argv;
-    if (!raw || !raw.trim()) {
-      return [];
-    }
-    return splitRawArgumentString(raw);
+  if (argv.length === 1 && typeof argv[0] === "string" && argv[0].includes(" ")) {
+    return splitRawArgumentString(argv[0]);
   }
   return argv;
 }
 
 function parseCommandInput(argv, config = {}) {
-  return parseArgs(normalizeArgv(argv), {
-    ...config,
-    aliasMap: {
-      C: "cwd",
-      ...(config.aliasMap ?? {})
-    }
-  });
+  return parseArgs(normalizeArgv(argv), config);
 }
 
 function resolveCommandCwd(options = {}) {
-  return options.cwd ? path.resolve(process.cwd(), options.cwd) : process.cwd();
+  return options.cwd ? path.resolve(options.cwd) : process.cwd();
 }
 
 function resolveCommandWorkspace(options = {}) {
@@ -158,391 +108,110 @@ function sleep(ms) {
 }
 
 function shorten(text, limit = 96) {
-  const normalized = String(text ?? "").trim().replace(/\s+/g, " ");
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= limit) {
-    return normalized;
-  }
-  return `${normalized.slice(0, limit - 3)}...`;
+  const trimmed = (text ?? "").trim().replace(/\s+/g, " ");
+  if (trimmed.length <= limit) return trimmed;
+  return `${trimmed.slice(0, limit - 1)}…`;
 }
 
 function firstMeaningfulLine(text, fallback) {
-  const line = String(text ?? "")
-    .split(/\r?\n/)
-    .map((value) => value.trim())
-    .find(Boolean);
-  return line ?? fallback;
+  for (const line of (text ?? "").split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed) return trimmed;
+  }
+  return fallback;
 }
 
+function ensureGeminiAvailable(cwd) {
+  const status = getGeminiAvailability(cwd);
+  if (!status.available) {
+    throw new Error(status.error || "Gemini CLI is not available. Run `/gemini:setup` for details.");
+  }
+  return status;
+}
+
+// --------- setup ---------
+
 async function buildSetupReport(cwd, actionsTaken = []) {
-  const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
-  const npmStatus = binaryAvailable("npm", ["--version"], { cwd });
-  const codexStatus = getCodexAvailability(cwd);
-  const authStatus = await getCodexAuthStatus(cwd);
-  const config = getConfig(workspaceRoot);
-
+  const availability = getGeminiAvailability(cwd);
+  const auth = await getGeminiAuthStatus(cwd);
+  const session = getSessionRuntimeStatus(process.env, cwd);
   const nextSteps = [];
-  if (!codexStatus.available) {
-    nextSteps.push("Install Codex with `npm install -g @openai/codex`.");
+  if (!availability.available) {
+    nextSteps.push(availability.error || "Install Gemini CLI.");
   }
-  if (codexStatus.available && !authStatus.loggedIn && authStatus.requiresOpenaiAuth) {
-    nextSteps.push("Run `!codex login`.");
-    nextSteps.push("If browser login is blocked, retry with `!codex login --device-auth` or `!codex login --with-api-key`.");
+  if (availability.available && !auth.loggedIn) {
+    nextSteps.push(auth.error || "Run `gemini` once interactively to complete Google OAuth.");
   }
-  if (!config.stopReviewGate) {
-    nextSteps.push("Optional: run `/codex:setup --enable-review-gate` to require a fresh review before stop.");
+  if (availability.available && auth.loggedIn && nextSteps.length === 0) {
+    nextSteps.push("Ready. Use `/gemini:rescue <prompt>` to delegate a task.");
   }
-
   return {
-    ready: nodeStatus.available && codexStatus.available && authStatus.loggedIn,
-    node: nodeStatus,
-    npm: npmStatus,
-    codex: codexStatus,
-    auth: authStatus,
-    sessionRuntime: getSessionRuntimeStatus(process.env, workspaceRoot),
-    reviewGateEnabled: Boolean(config.stopReviewGate),
-    actionsTaken,
-    nextSteps
+    cwd,
+    binary: availability.binary,
+    version: availability.version,
+    available: availability.available,
+    auth,
+    session,
+    nextSteps,
+    actionsTaken
   };
 }
 
 async function handleSetup(argv) {
   const { options } = parseCommandInput(argv, {
     valueOptions: ["cwd"],
-    booleanOptions: ["json", "enable-review-gate", "disable-review-gate"]
+    booleanOptions: ["json"]
   });
-
-  if (options["enable-review-gate"] && options["disable-review-gate"]) {
-    throw new Error("Choose either --enable-review-gate or --disable-review-gate.");
-  }
-
   const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
-  const actionsTaken = [];
-
-  if (options["enable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", true);
-    actionsTaken.push(`Enabled the stop-time review gate for ${workspaceRoot}.`);
-  } else if (options["disable-review-gate"]) {
-    setConfig(workspaceRoot, "stopReviewGate", false);
-    actionsTaken.push(`Disabled the stop-time review gate for ${workspaceRoot}.`);
-  }
-
-  const finalReport = await buildSetupReport(cwd, actionsTaken);
-  outputResult(options.json ? finalReport : renderSetupReport(finalReport), options.json);
+  const report = await buildSetupReport(cwd);
+  outputCommandResult(report, renderSetupReport(report), options.json);
 }
 
-function buildAdversarialReviewPrompt(context, focusText) {
-  const template = loadPromptTemplate(ROOT_DIR, "adversarial-review");
-  return interpolateTemplate(template, {
-    REVIEW_KIND: "Adversarial Review",
-    TARGET_LABEL: context.target.label,
-    USER_FOCUS: focusText || "No extra focus provided.",
-    REVIEW_COLLECTION_GUIDANCE: context.collectionGuidance,
-    REVIEW_INPUT: context.content
-  });
+// --------- task lifecycle ---------
+
+function getCurrentClaudeSessionId() {
+  return process.env[SESSION_ID_ENV] || null;
 }
 
-function ensureCodexAvailable(cwd) {
-  const availability = getCodexAvailability(cwd);
-  if (!availability.available) {
-    throw new Error("Codex CLI is not installed or is missing required runtime support. Install it with `npm install -g @openai/codex`, then rerun `/codex:setup`.");
-  }
+function filterJobsForCurrentClaudeSession(jobs) {
+  const sessionId = getCurrentClaudeSessionId();
+  if (!sessionId) return jobs;
+  return jobs.filter((job) => !job.sessionId || job.sessionId === sessionId);
 }
 
-function buildNativeReviewTarget(target) {
-  if (target.mode === "working-tree") {
-    return { type: "uncommittedChanges" };
+function findLatestResumableTaskJob(jobs) {
+  for (const job of jobs) {
+    if (job.jobClass !== "task") continue;
+    if (job.status === "completed" || job.status === "failed") {
+      return job;
+    }
   }
-
-  if (target.mode === "branch") {
-    return { type: "baseBranch", branch: target.baseRef };
-  }
-
   return null;
-}
-
-function validateNativeReviewRequest(target, focusText) {
-  if (focusText.trim()) {
-    throw new Error(
-      `\`/codex:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex:adversarial-review ${focusText.trim()}\` for focused review instructions.`
-    );
-  }
-
-  const nativeTarget = buildNativeReviewTarget(target);
-  if (!nativeTarget) {
-    throw new Error("This `/codex:review` target is not supported by the built-in reviewer. Retry with `/codex:adversarial-review` for custom targeting.");
-  }
-
-  return nativeTarget;
-}
-
-function renderStatusPayload(report, asJson) {
-  return asJson ? report : renderStatusReport(report);
 }
 
 function isActiveJobStatus(status) {
   return status === "queued" || status === "running";
 }
 
-function getCurrentClaudeSessionId() {
-  return process.env[SESSION_ID_ENV] ?? null;
-}
-
-function filterJobsForCurrentClaudeSession(jobs) {
-  const sessionId = getCurrentClaudeSessionId();
-  if (!sessionId) {
-    return jobs;
-  }
-  return jobs.filter((job) => job.sessionId === sessionId);
-}
-
-function findLatestResumableTaskJob(jobs) {
-  return (
-    jobs.find(
-      (job) =>
-        job.jobClass === "task" &&
-        job.threadId &&
-        job.status !== "queued" &&
-        job.status !== "running"
-    ) ?? null
-  );
+function renderStatusPayload(report, asJson) {
+  if (asJson) return report;
+  return renderStatusReport(report);
 }
 
 async function waitForSingleJobSnapshot(cwd, reference, options = {}) {
-  const timeoutMs = Math.max(0, Number(options.timeoutMs) || DEFAULT_STATUS_WAIT_TIMEOUT_MS);
-  const pollIntervalMs = Math.max(100, Number(options.pollIntervalMs) || DEFAULT_STATUS_POLL_INTERVAL_MS);
+  const timeoutMs = Number(options.timeoutMs ?? DEFAULT_STATUS_WAIT_TIMEOUT_MS);
+  const pollIntervalMs = Number(options.pollIntervalMs ?? DEFAULT_STATUS_POLL_INTERVAL_MS);
   const deadline = Date.now() + timeoutMs;
   let snapshot = buildSingleJobSnapshot(cwd, reference);
-
   while (isActiveJobStatus(snapshot.job.status) && Date.now() < deadline) {
-    await sleep(Math.min(pollIntervalMs, Math.max(0, deadline - Date.now())));
+    await sleep(pollIntervalMs);
     snapshot = buildSingleJobSnapshot(cwd, reference);
   }
-
-  return {
-    ...snapshot,
-    waitTimedOut: isActiveJobStatus(snapshot.job.status),
-    timeoutMs
-  };
-}
-
-async function resolveLatestTrackedTaskThread(cwd, options = {}) {
-  const workspaceRoot = resolveWorkspaceRoot(cwd);
-  const sessionId = getCurrentClaudeSessionId();
-  const jobs = sortJobsNewestFirst(listJobs(workspaceRoot)).filter((job) => job.id !== options.excludeJobId);
-  const visibleJobs = filterJobsForCurrentClaudeSession(jobs);
-  const activeTask = visibleJobs.find((job) => job.jobClass === "task" && (job.status === "queued" || job.status === "running"));
-  if (activeTask) {
-    throw new Error(`Task ${activeTask.id} is still running. Use /codex:status before continuing it.`);
-  }
-
-  const trackedTask = findLatestResumableTaskJob(visibleJobs);
-  if (trackedTask) {
-    return { id: trackedTask.threadId };
-  }
-
-  if (sessionId) {
-    return null;
-  }
-
-  return findLatestTaskThread(workspaceRoot);
-}
-
-async function executeReviewRun(request) {
-  ensureCodexAvailable(request.cwd);
-  ensureGitRepository(request.cwd);
-
-  const target = resolveReviewTarget(request.cwd, {
-    base: request.base,
-    scope: request.scope
-  });
-  const focusText = request.focusText?.trim() ?? "";
-  const reviewName = request.reviewName ?? "Review";
-  if (reviewName === "Review") {
-    const reviewTarget = validateNativeReviewRequest(target, focusText);
-    const result = await runAppServerReview(request.cwd, {
-      target: reviewTarget,
-      model: request.model,
-      onProgress: request.onProgress
-    });
-    const payload = {
-      review: reviewName,
-      target,
-      threadId: result.threadId,
-      sourceThreadId: result.sourceThreadId,
-      codex: {
-        status: result.status,
-        stderr: result.stderr,
-        stdout: result.reviewText,
-        reasoning: result.reasoningSummary
-      }
-    };
-    const rendered = renderNativeReviewResult(
-      {
-        status: result.status,
-        stdout: result.reviewText,
-        stderr: result.stderr
-      },
-      { reviewLabel: reviewName, targetLabel: target.label, reasoningSummary: result.reasoningSummary }
-    );
-
-    return {
-      exitStatus: result.status,
-      threadId: result.threadId,
-      turnId: result.turnId,
-      payload,
-      rendered,
-      summary: firstMeaningfulLine(result.reviewText, `${reviewName} completed.`),
-      jobTitle: `Codex ${reviewName}`,
-      jobClass: "review",
-      targetLabel: target.label
-    };
-  }
-
-  const context = collectReviewContext(request.cwd, target);
-  const prompt = buildAdversarialReviewPrompt(context, focusText);
-  const result = await runAppServerTurn(context.repoRoot, {
-    prompt,
-    model: request.model,
-    sandbox: "read-only",
-    outputSchema: readOutputSchema(REVIEW_SCHEMA),
-    onProgress: request.onProgress
-  });
-  const parsed = parseStructuredOutput(result.finalMessage, {
-    status: result.status,
-    failureMessage: result.error?.message ?? result.stderr
-  });
-  const payload = {
-    review: reviewName,
-    target,
-    threadId: result.threadId,
-    context: {
-      repoRoot: context.repoRoot,
-      branch: context.branch,
-      summary: context.summary
-    },
-    codex: {
-      status: result.status,
-      stderr: result.stderr,
-      stdout: result.finalMessage,
-      reasoning: result.reasoningSummary
-    },
-    result: parsed.parsed,
-    rawOutput: parsed.rawOutput,
-    parseError: parsed.parseError,
-    reasoningSummary: result.reasoningSummary
-  };
-
-  return {
-    exitStatus: result.status,
-    threadId: result.threadId,
-    turnId: result.turnId,
-    payload,
-    rendered: renderReviewResult(parsed, {
-      reviewLabel: reviewName,
-      targetLabel: context.target.label,
-      reasoningSummary: result.reasoningSummary
-    }),
-    summary: parsed.parsed?.summary ?? parsed.parseError ?? firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
-    jobTitle: `Codex ${reviewName}`,
-    jobClass: "review",
-    targetLabel: context.target.label
-  };
-}
-
-
-async function executeTaskRun(request) {
-  const workspaceRoot = resolveWorkspaceRoot(request.cwd);
-  ensureCodexAvailable(request.cwd);
-
-  const taskMetadata = buildTaskRunMetadata({
-    prompt: request.prompt,
-    resumeLast: request.resumeLast
-  });
-
-  let resumeThreadId = null;
-  if (request.resumeLast) {
-    const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
-      excludeJobId: request.jobId
-    });
-    if (!latestThread) {
-      throw new Error("No previous Codex task thread was found for this repository.");
-    }
-    resumeThreadId = latestThread.id;
-  }
-
-  if (!request.prompt && !resumeThreadId) {
-    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
-  }
-
-  const result = await runAppServerTurn(workspaceRoot, {
-    resumeThreadId,
-    prompt: request.prompt,
-    defaultPrompt: resumeThreadId ? DEFAULT_CONTINUE_PROMPT : "",
-    model: request.model,
-    effort: request.effort,
-    sandbox: request.write ? "workspace-write" : "read-only",
-    onProgress: request.onProgress,
-    persistThread: true,
-    threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
-  });
-
-  const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
-  const failureMessage = result.error?.message ?? result.stderr ?? "";
-  const rendered = renderTaskResult(
-    {
-      rawOutput,
-      failureMessage,
-      reasoningSummary: result.reasoningSummary
-    },
-    {
-      title: taskMetadata.title,
-      jobId: request.jobId ?? null,
-      write: Boolean(request.write)
-    }
-  );
-  const payload = {
-    status: result.status,
-    threadId: result.threadId,
-    rawOutput,
-    touchedFiles: result.touchedFiles,
-    reasoningSummary: result.reasoningSummary
-  };
-
-  return {
-    exitStatus: result.status,
-    threadId: result.threadId,
-    turnId: result.turnId,
-    payload,
-    rendered,
-    summary: firstMeaningfulLine(rawOutput, firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)),
-    jobTitle: taskMetadata.title,
-    jobClass: "task",
-    write: Boolean(request.write)
-  };
-}
-
-function buildReviewJobMetadata(reviewName, target) {
-  return {
-    kind: reviewName === "Adversarial Review" ? "adversarial-review" : "review",
-    title: reviewName === "Review" ? "Codex Review" : `Codex ${reviewName}`,
-    summary: `${reviewName} ${target.label}`
-  };
+  return snapshot;
 }
 
 function buildTaskRunMetadata({ prompt, resumeLast = false }) {
-  if (!resumeLast && String(prompt ?? "").includes(STOP_REVIEW_TASK_MARKER)) {
-    return {
-      title: "Codex Stop Gate Review",
-      summary: "Stop-gate review of previous Claude turn"
-    };
-  }
-
-  const title = resumeLast ? "Codex Resume" : "Codex Task";
+  const title = resumeLast ? "Gemini Resume" : "Gemini Task";
   const fallbackSummary = resumeLast ? DEFAULT_CONTINUE_PROMPT : "Task";
   return {
     title,
@@ -551,21 +220,14 @@ function buildTaskRunMetadata({ prompt, resumeLast = false }) {
 }
 
 function renderQueuedTaskLaunch(payload) {
-  return `${payload.title} started in the background as ${payload.jobId}. Check /codex:status ${payload.jobId} for progress.\n`;
-}
-
-function getJobKindLabel(kind, jobClass) {
-  if (kind === "adversarial-review") {
-    return "adversarial-review";
-  }
-  return jobClass === "review" ? "review" : "rescue";
+  return `${payload.title} started in the background as ${payload.jobId}. Check /gemini:status ${payload.jobId} for progress.\n`;
 }
 
 function createCompanionJob({ prefix, kind, title, workspaceRoot, jobClass, summary, write = false }) {
   return createJobRecord({
     id: generateJobId(prefix),
     kind,
-    kindLabel: getJobKindLabel(kind, jobClass),
+    kindLabel: jobClass === "task" ? "rescue" : kind,
     title,
     workspaceRoot,
     jobClass,
@@ -598,23 +260,14 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
-  return {
-    cwd,
-    model,
-    effort,
-    prompt,
-    write,
-    resumeLast,
-    jobId
-  };
+function buildTaskRequest({ cwd, model, prompt, write, resumeLast, jobId }) {
+  return { cwd, model, prompt, write, resumeLast, jobId };
 }
 
 function readTaskPrompt(cwd, options, positionals) {
   if (options["prompt-file"]) {
     return fs.readFileSync(path.resolve(cwd, options["prompt-file"]), "utf8");
   }
-
   const positionalPrompt = positionals.join(" ");
   return positionalPrompt || readStdinIfPiped();
 }
@@ -623,6 +276,81 @@ function requireTaskRequest(prompt, resumeLast) {
   if (!prompt && !resumeLast) {
     throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
   }
+}
+
+async function executeTaskRun(request) {
+  const workspaceRoot = resolveWorkspaceRoot(request.cwd);
+  ensureGeminiAvailable(request.cwd);
+
+  const taskMetadata = buildTaskRunMetadata({
+    prompt: request.prompt,
+    resumeLast: request.resumeLast
+  });
+
+  if (!request.prompt && !request.resumeLast) {
+    throw new Error("Provide a prompt, a prompt file, piped stdin, or use --resume-last.");
+  }
+
+  let result;
+  let runError = null;
+  try {
+    result = await runGeminiTask(workspaceRoot, {
+      resumeLast: request.resumeLast,
+      prompt: request.prompt,
+      defaultPrompt: request.resumeLast ? DEFAULT_CONTINUE_PROMPT : "",
+      model: request.model,
+      write: Boolean(request.write),
+      onProgress: request.onProgress
+    });
+  } catch (error) {
+    runError = error;
+    result = {
+      ok: false,
+      threadId: null,
+      turnId: null,
+      finalMessage: "",
+      durationMs: 0,
+      pid: null
+    };
+  }
+
+  const rawOutput = typeof result.finalMessage === "string" ? result.finalMessage : "";
+  const failureMessage = runError?.message ?? "";
+  const status = runError ? "failed" : "completed";
+  const rendered = renderTaskResult(
+    {
+      rawOutput,
+      failureMessage,
+      reasoningSummary: null
+    },
+    {
+      title: taskMetadata.title,
+      jobId: request.jobId ?? null,
+      write: Boolean(request.write)
+    }
+  );
+  const payload = {
+    status,
+    threadId: result.threadId,
+    rawOutput,
+    touchedFiles: [],
+    reasoningSummary: null
+  };
+
+  return {
+    exitStatus: status === "completed" ? 0 : 1,
+    threadId: result.threadId,
+    turnId: result.turnId,
+    payload,
+    rendered,
+    summary: firstMeaningfulLine(
+      rawOutput,
+      firstMeaningfulLine(failureMessage, `${taskMetadata.title} finished.`)
+    ),
+    jobTitle: taskMetadata.title,
+    jobClass: "task",
+    write: Boolean(request.write)
+  };
 }
 
 async function runForegroundCommand(job, runner, options = {}) {
@@ -679,69 +407,18 @@ function enqueueBackgroundTask(cwd, job, request) {
   };
 }
 
-async function handleReviewCommand(argv, config) {
-  const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["base", "scope", "model", "cwd"],
-    booleanOptions: ["json", "background", "wait"],
-    aliasMap: {
-      m: "model"
-    }
-  });
-
-  const cwd = resolveCommandCwd(options);
-  const workspaceRoot = resolveCommandWorkspace(options);
-  const focusText = positionals.join(" ").trim();
-  const target = resolveReviewTarget(cwd, {
-    base: options.base,
-    scope: options.scope
-  });
-
-  config.validateRequest?.(target, focusText);
-  const metadata = buildReviewJobMetadata(config.reviewName, target);
-  const job = createCompanionJob({
-    prefix: "review",
-    kind: metadata.kind,
-    title: metadata.title,
-    workspaceRoot,
-    jobClass: "review",
-    summary: metadata.summary
-  });
-  await runForegroundCommand(
-    job,
-    (progress) =>
-      executeReviewRun({
-        cwd,
-        base: options.base,
-        scope: options.scope,
-        model: options.model,
-        focusText,
-        reviewName: config.reviewName,
-        onProgress: progress
-      }),
-    { json: options.json }
-  );
-}
-
-async function handleReview(argv) {
-  return handleReviewCommand(argv, {
-    reviewName: "Review",
-    validateRequest: validateNativeReviewRequest
-  });
-}
+// --------- subcommand handlers ---------
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "cwd", "prompt-file"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
-    aliasMap: {
-      m: "model"
-    }
+    aliasMap: { m: "model" }
   });
 
   const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
-  const model = normalizeRequestedModel(options.model);
-  const effort = normalizeReasoningEffort(options.effort);
+  const model = options.model || null;
   const prompt = readTaskPrompt(cwd, options, positionals);
 
   const resumeLast = Boolean(options["resume-last"] || options.resume);
@@ -750,25 +427,14 @@ async function handleTask(argv) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
   const write = Boolean(options.write);
-  const taskMetadata = buildTaskRunMetadata({
-    prompt,
-    resumeLast
-  });
+  const taskMetadata = buildTaskRunMetadata({ prompt, resumeLast });
 
   if (options.background) {
-    ensureCodexAvailable(cwd);
+    ensureGeminiAvailable(cwd);
     requireTaskRequest(prompt, resumeLast);
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
-    const request = buildTaskRequest({
-      cwd,
-      model,
-      effort,
-      prompt,
-      write,
-      resumeLast,
-      jobId: job.id
-    });
+    const request = buildTaskRequest({ cwd, model, prompt, write, resumeLast, jobId: job.id });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
     outputCommandResult(payload, renderQueuedTaskLaunch(payload), options.json);
     return;
@@ -781,7 +447,6 @@ async function handleTask(argv) {
       executeTaskRun({
         cwd,
         model,
-        effort,
         prompt,
         write,
         resumeLast,
@@ -814,25 +479,12 @@ async function handleTaskWorker(argv) {
   }
 
   const { logFile, progress } = createTrackedProgress(
-    {
-      ...storedJob,
-      workspaceRoot
-    },
-    {
-      logFile: storedJob.logFile ?? null
-    }
+    { ...storedJob, workspaceRoot },
+    { logFile: storedJob.logFile ?? null }
   );
   await runTrackedJob(
-    {
-      ...storedJob,
-      workspaceRoot,
-      logFile
-    },
-    () =>
-      executeTaskRun({
-        ...request,
-        onProgress: progress
-      }),
+    { ...storedJob, workspaceRoot, logFile },
+    () => executeTaskRun({ ...request, onProgress: progress }),
     { logFile }
   );
 }
@@ -874,10 +526,7 @@ function handleResult(argv) {
   const reference = positionals[0] ?? "";
   const { workspaceRoot, job } = resolveResultJob(cwd, reference);
   const storedJob = readStoredJob(workspaceRoot, job.id);
-  const payload = {
-    job,
-    storedJob
-  };
+  const payload = { job, storedJob };
 
   outputCommandResult(payload, renderStoredJobResult(job, storedJob), options.json);
 }
@@ -888,7 +537,6 @@ function handleTaskResumeCandidate(argv) {
     booleanOptions: ["json"]
   });
 
-  const cwd = resolveCommandCwd(options);
   const workspaceRoot = resolveCommandWorkspace(options);
   const sessionId = getCurrentClaudeSessionId();
   const jobs = filterJobsForCurrentClaudeSession(sortJobsNewestFirst(listJobs(workspaceRoot)));
@@ -927,17 +575,12 @@ async function handleCancel(argv) {
   const reference = positionals[0] ?? "";
   const { workspaceRoot, job } = resolveCancelableJob(cwd, reference, { env: process.env });
   const existing = readStoredJob(workspaceRoot, job.id) ?? {};
-  const threadId = existing.threadId ?? job.threadId ?? null;
-  const turnId = existing.turnId ?? job.turnId ?? null;
 
-  const interrupt = await interruptAppServerTurn(cwd, { threadId, turnId });
-  if (interrupt.attempted) {
-    appendLogLine(
-      job.logFile,
-      interrupt.interrupted
-        ? `Requested Codex turn interrupt for ${turnId} on ${threadId}.`
-        : `Codex turn interrupt failed${interrupt.detail ? `: ${interrupt.detail}` : "."}`
-    );
+  const interrupt = await interruptGeminiTurn(cwd, { pid: job.pid ?? null });
+  if (interrupt.ok) {
+    appendLogLine(job.logFile, "Sent interrupt signal to gemini child.");
+  } else if (interrupt.reason) {
+    appendLogLine(job.logFile, `Interrupt failed: ${interrupt.reason}`);
   }
 
   terminateProcessTree(job.pid ?? Number.NaN);
@@ -971,12 +614,14 @@ async function handleCancel(argv) {
     jobId: job.id,
     status: "cancelled",
     title: job.title,
-    turnInterruptAttempted: interrupt.attempted,
-    turnInterrupted: interrupt.interrupted
+    turnInterruptAttempted: true,
+    turnInterrupted: interrupt.ok
   };
 
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
 }
+
+// --------- main dispatcher ---------
 
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
@@ -988,14 +633,6 @@ async function main() {
   switch (subcommand) {
     case "setup":
       await handleSetup(argv);
-      break;
-    case "review":
-      await handleReview(argv);
-      break;
-    case "adversarial-review":
-      await handleReviewCommand(argv, {
-        reviewName: "Adversarial Review"
-      });
       break;
     case "task":
       await handleTask(argv);
