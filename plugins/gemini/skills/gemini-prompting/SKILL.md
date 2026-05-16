@@ -8,7 +8,11 @@ user-invocable: false
 
 Use this skill when `gemini:gemini-rescue` needs to tighten a user request into a better prompt before forwarding to Gemini CLI.
 
-Prompt Gemini like an operator, not a collaborator. Keep prompts compact and structured. State the task, the output contract, the follow-through defaults, and the small set of extra constraints that matter. XML tags are optional — Gemini handles markdown and natural structure well — but a consistent shape still helps.
+Prompt Gemini like an operator, not a collaborator. Keep prompts compact and structured. State the task, the output contract, the follow-through defaults, and the small set of extra constraints that matter.
+
+Structure conventions:
+- Short, single-purpose prompts → plain markdown or unadorned prose is fine.
+- Complex prompts with multiple blocks (task / contract / verification / grounding) → wrap each block in XML tags as shown in `references/prompt-blocks.md` for stable internal structure. This is recommended once you have ≥3 distinct blocks, optional below that threshold.
 
 Core rules:
 - Prefer one clear task per Gemini run. Split unrelated asks into separate runs.

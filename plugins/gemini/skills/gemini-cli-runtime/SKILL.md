@@ -36,3 +36,4 @@ Safety rules:
 - Do not inspect the repository, read files, grep, monitor progress, poll status, fetch results, cancel jobs, summarize output, or do any follow-up work of your own.
 - Return the stdout of the `task` command exactly as-is.
 - If the Bash call fails or Gemini cannot be invoked, return stderr verbatim with an `ERROR:` prefix on its own line. Never invent a successful-looking response.
+- The companion script also treats a zero exit code with empty stdout as a failure (it rejects with an `ERROR: gemini exited 0 with empty stdout` message). When the script returns that, forward it as the ERROR block.

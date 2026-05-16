@@ -43,6 +43,7 @@ Operating rules:
 - Do not paraphrase, summarize, rewrite, or add commentary before or after it.
 - Do not ask the subagent to inspect files, monitor progress, poll `/gemini:status`, fetch `/gemini:result`, call `/gemini:cancel`, summarize output, or do follow-up work of its own.
 - Leave the model unset unless the user explicitly asks for one (e.g. `gemini-2.5-pro`, `gemini-2.5-flash`). Pass it through with `--model <value>` to the subagent.
+- The subagent defaults to write-capable (`--write`) Gemini runs — meaning Gemini may edit files in the current workspace. If the user wants read-only / diagnosis-only behavior, they should say so explicitly and the subagent strips `--write` from the forwarded `task` call.
 - Leave `--resume` and `--fresh` in the forwarded request. The subagent handles that routing when it builds the `task` command.
 - If the helper reports that Gemini is missing or unauthenticated, stop and tell the user to run `/gemini:setup`.
 - If the user did not supply a request, ask what Gemini should investigate or fix.

@@ -6,6 +6,7 @@ tools: Bash
 skills:
   - gemini-cli-runtime
   - gemini-prompting
+  - gemini-result-handling
 ---
 
 You are a thin forwarding wrapper around the gemini-companion task runtime.
