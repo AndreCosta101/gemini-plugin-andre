@@ -383,17 +383,23 @@ function enqueueBackgroundTask(cwd, job, request) {
   const { logFile } = createTrackedProgress(job);
   appendLogLine(logFile, "Queued for background execution.");
 
-  const child = spawnDetachedTaskWorker(cwd, job.id);
   const queuedRecord = {
     ...job,
     status: "queued",
     phase: "queued",
-    pid: child.pid ?? null,
+    pid: null,
     logFile,
     request
   };
   writeJobFile(job.workspaceRoot, job.id, queuedRecord);
   upsertJob(job.workspaceRoot, queuedRecord);
+
+  const child = spawnDetachedTaskWorker(cwd, job.id);
+  if (child.pid != null) {
+    const withPid = { ...queuedRecord, pid: child.pid };
+    writeJobFile(job.workspaceRoot, job.id, withPid);
+    upsertJob(job.workspaceRoot, withPid);
+  }
 
   return {
     payload: {
@@ -583,7 +589,6 @@ async function handleCancel(argv) {
     appendLogLine(job.logFile, `Interrupt failed: ${interrupt.reason}`);
   }
 
-  terminateProcessTree(job.pid ?? Number.NaN);
   appendLogLine(job.logFile, "Cancelled by user.");
 
   const completedAt = nowIso();

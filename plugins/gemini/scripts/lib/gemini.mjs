@@ -150,7 +150,11 @@ function buildGeminiArgs(request) {
     args.push("--session-id", request.resumeThreadId);
   }
   if (request.includeDirectories?.length) {
-    args.push("--include-directories", request.includeDirectories.join(","));
+    // Gemini CLI accepts the flag repeated for each directory; that form
+    // is unambiguous across Yargs versions vs comma-joined.
+    for (const dir of request.includeDirectories) {
+      args.push("--include-directories", dir);
+    }
   }
   return args;
 }
@@ -198,12 +202,24 @@ export async function runGeminiTask(workspaceRoot, request) {
         reject(new Error(`ERROR: ${message}`));
         return;
       }
+      const trimmed = stdout.trim();
+      if (trimmed.length === 0) {
+        // Guard against silent-pass-through hallucination class:
+        // gemini exited 0 but produced no output. Could be a future
+        // CLI version that swallows auth failures, or a no-op prompt.
+        // Surface the empty result as an explicit error rather than a
+        // success with empty finalMessage.
+        const stderrTrim = stderr.trim();
+        const detail = stderrTrim ? ` stderr: ${stderrTrim}` : "";
+        reject(new Error(`ERROR: gemini exited 0 with empty stdout.${detail}`));
+        return;
+      }
       onProgress({ phase: "completed", message: "gemini finished." });
       resolve({
         ok: true,
         threadId: request.resumeThreadId || null,
         turnId: null,
-        finalMessage: stdout.trim(),
+        finalMessage: trimmed,
         structured: null,
         durationMs,
         pid: child.pid ?? null
