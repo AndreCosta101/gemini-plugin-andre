@@ -1,21 +1,21 @@
 {
-  "name": "openai-codex",
+  "name": "gemini-plugin-andre",
   "owner": {
-    "name": "OpenAI"
+    "name": "AndreCosta101"
   },
   "metadata": {
-    "description": "Codex plugins to use in Claude Code for delegation and code review.",
-    "version": "1.0.4"
+    "description": "Use Gemini CLI from Claude Code to delegate tasks. Lean fork of openai/codex-plugin-cc.",
+    "version": "0.1.0"
   },
   "plugins": [
     {
-      "name": "codex",
-      "description": "Use Codex from Claude Code to review code or delegate tasks.",
-      "version": "1.0.4",
+      "name": "gemini",
+      "description": "Use Gemini from Claude Code to delegate tasks.",
+      "version": "0.1.0",
       "author": {
-        "name": "OpenAI"
+        "name": "AndreCosta101"
       },
-      "source": "./plugins/codex"
+      "source": "./plugins/gemini"
     }
   ]
 }

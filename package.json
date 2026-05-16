@@ -1,9 +1,9 @@
 {
-  "name": "@openai/codex-plugin-cc",
-  "version": "1.0.4",
+  "name": "@andre/gemini-plugin-andre",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Use Codex from Claude Code to review code or delegate tasks.",
+  "description": "Use Gemini from Claude Code to delegate tasks. Lean fork of @openai/codex-plugin-cc.",
   "license": "Apache-2.0",
   "engines": {
     "node": ">=18.18.0"

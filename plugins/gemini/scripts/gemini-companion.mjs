@@ -19,7 +19,7 @@ import {
     readOutputSchema,
     runAppServerReview,
     runAppServerTurn
-  } from "./lib/codex.mjs";
+  } from "./lib/gemini.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -639,7 +639,7 @@ async function runForegroundCommand(job, runner, options = {}) {
 }
 
 function spawnDetachedTaskWorker(cwd, jobId) {
-  const scriptPath = path.join(ROOT_DIR, "scripts", "codex-companion.mjs");
+  const scriptPath = path.join(ROOT_DIR, "scripts", "gemini-companion.mjs");
   const child = spawn(process.execPath, [scriptPath, "task-worker", "--cwd", cwd, "--job-id", jobId], {
     cwd,
     env: process.env,

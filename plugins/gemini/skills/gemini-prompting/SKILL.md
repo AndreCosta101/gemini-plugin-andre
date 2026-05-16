@@ -6,7 +6,7 @@ user-invocable: false
 
 # GPT-5.4 Prompting
 
-Use this skill when `codex:codex-rescue` needs to ask Codex or another GPT-5.4-based workflow for help.
+Use this skill when `gemini:gemini-rescue` needs to ask Codex or another GPT-5.4-based workflow for help.
 
 Prompt Codex like an operator, not a collaborator. Keep prompts compact and block-structured with XML tags. State the task, the output contract, the follow-through defaults, and the small set of extra constraints that matter.
 
@@ -50,5 +50,5 @@ Prompt assembly checklist:
 5. Remove redundant instructions before sending the prompt.
 
 Reusable blocks live in [references/prompt-blocks.md](references/prompt-blocks.md).
-Concrete end-to-end templates live in [references/codex-prompt-recipes.md](references/codex-prompt-recipes.md).
-Common failure modes to avoid live in [references/codex-prompt-antipatterns.md](references/codex-prompt-antipatterns.md).
+Concrete end-to-end templates live in [references/gemini-prompt-recipes.md](references/gemini-prompt-recipes.md).
+Common failure modes to avoid live in [references/gemini-prompt-antipatterns.md](references/gemini-prompt-antipatterns.md).

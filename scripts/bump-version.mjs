@@ -39,7 +39,7 @@ const TARGETS = [
     ]
   },
   {
-    file: "plugins/codex/.claude-plugin/plugin.json",
+    file: "plugins/gemini/.claude-plugin/plugin.json",
     values: [
       {
         label: "version",
