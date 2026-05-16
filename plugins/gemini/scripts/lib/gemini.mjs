@@ -137,6 +137,10 @@ function approvalModeFor(request) {
 function buildGeminiArgs(request) {
   const prompt = (request.prompt && request.prompt.trim()) || request.defaultPrompt || DEFAULT_CONTINUE_PROMPT;
   const args = ["-p", prompt];
+  // The user has explicitly invoked the rescue command on the current
+  // workspace, so consent to Gemini reading that workspace is implicit.
+  // Without this, Gemini refuses to run in non-interactive mode.
+  args.push("--skip-trust");
   args.push("--approval-mode", approvalModeFor(request));
   if (request.model) {
     args.push("-m", request.model);
