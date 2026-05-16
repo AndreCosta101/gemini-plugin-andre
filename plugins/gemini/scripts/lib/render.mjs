@@ -386,7 +386,7 @@ export function renderStoredJobResult(job, storedJob) {
     if (!threadId) {
       return output;
     }
-    return `${output}\nGemini session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}\nGemini session ID: ${threadId}\nResume in Gemini: ${resumeCommand}\n`;
   }
 
   const rawOutput =
@@ -398,7 +398,7 @@ export function renderStoredJobResult(job, storedJob) {
     if (!threadId) {
       return output;
     }
-    return `${output}\nGemini session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}\nGemini session ID: ${threadId}\nResume in Gemini: ${resumeCommand}\n`;
   }
 
   if (storedJob?.rendered) {
@@ -406,11 +406,11 @@ export function renderStoredJobResult(job, storedJob) {
     if (!threadId) {
       return output;
     }
-    return `${output}\nGemini session ID: ${threadId}\nResume in Codex: ${resumeCommand}\n`;
+    return `${output}\nGemini session ID: ${threadId}\nResume in Gemini: ${resumeCommand}\n`;
   }
 
   const lines = [
-    `# ${job.title ?? "Codex Result"}`,
+    `# ${job.title ?? "Gemini Result"}`,
     "",
     `Job: ${job.id}`,
     `Status: ${job.status}`
@@ -418,7 +418,7 @@ export function renderStoredJobResult(job, storedJob) {
 
   if (threadId) {
     lines.push(`Gemini session ID: ${threadId}`);
-    lines.push(`Resume in Codex: ${resumeCommand}`);
+    lines.push(`Resume in Gemini: ${resumeCommand}`);
   }
 
   if (job.summary) {

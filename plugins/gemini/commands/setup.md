@@ -1,37 +1,25 @@
 ---
-description: Check whether the local Codex CLI is ready and optionally toggle the stop-time review gate
-argument-hint: '[--enable-review-gate|--disable-review-gate]'
-allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
+description: Check whether the local Gemini CLI is ready and authenticated
+allowed-tools: Bash(node:*), AskUserQuestion
 ---
 
 Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/gemini-companion.mjs" setup --json $ARGUMENTS
+node "${CLAUDE_PLUGIN_ROOT}/scripts/gemini-companion.mjs" setup --json
 ```
 
-If the result says Codex is unavailable and npm is available:
-- Use `AskUserQuestion` exactly once to ask whether Claude should install Codex now.
-- Put the install option first and suffix it with `(Recommended)`.
-- Use these two options:
-  - `Install Codex (Recommended)`
-  - `Skip for now`
-- If the user chooses install, run:
+If the result says Gemini is unavailable:
+- The CLI is missing. Install via `brew install gemini-cli` or https://github.com/google-gemini/gemini-cli, then rerun this command.
 
-```bash
-npm install -g @openai/codex
-```
+If Gemini is installed but not authenticated:
+- Tell the user to run `gemini` once interactively in a terminal to complete Google OAuth.
+- `~/.gemini/settings.json` will then contain `"selectedType": "oauth-personal"`.
+- No API key is required; the plugin reads OAuth credentials from that settings file.
 
-- Then rerun:
-
-```bash
-node "${CLAUDE_PLUGIN_ROOT}/scripts/gemini-companion.mjs" setup --json $ARGUMENTS
-```
-
-If Codex is already installed or npm is unavailable:
-- Do not ask about installation.
+If Gemini is installed and authenticated:
+- Present the setup output to the user as-is.
 
 Output rules:
 - Present the final setup output to the user.
-- If installation was skipped, present the original setup output.
-- If Codex is installed but not authenticated, preserve the guidance to run `!codex login`.
+- Do not invent install commands or version numbers; rely on the script's report.

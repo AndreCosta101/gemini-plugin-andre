@@ -1,5 +1,5 @@
 ---
-description: Cancel an active background Codex job in this repository
+description: Cancel an active background Gemini job in this repository
 argument-hint: '[job-id]'
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
