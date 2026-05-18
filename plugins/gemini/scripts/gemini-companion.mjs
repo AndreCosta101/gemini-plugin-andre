@@ -354,9 +354,12 @@ async function executeTaskRun(request) {
 }
 
 async function runForegroundCommand(job, runner, options = {}) {
+  // Foreground task is invoked by the gemini-rescue subagent, whose Rule 4
+  // treats any non-empty stderr on exit 0 as failure. Keep progress out of
+  // stderr; the final rendered result on stdout is what the agent forwards.
   const { logFile, progress } = createTrackedProgress(job, {
     logFile: options.logFile,
-    stderr: !options.json
+    stderr: false
   });
   const execution = await runTrackedJob(job, () => runner(progress), { logFile });
   outputResult(options.json ? execution.payload : execution.rendered, options.json);
