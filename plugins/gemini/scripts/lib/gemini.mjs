@@ -160,10 +160,15 @@ function shouldSkipPermissions(request) {
 function buildGeminiArgs(request) {
   const prompt = (request.prompt && request.prompt.trim()) || request.defaultPrompt || DEFAULT_CONTINUE_PROMPT;
   const args = [];
-  if (request.model) {
-    // e.g. gemini-3.1-pro / gemini-3-flash — run `agy models` to list ids.
-    args.push("--model", request.model);
-  }
+  // agy model ids are the exact label strings from `agy models` (e.g.
+  // "Gemini 3.1 Pro (High)", "Gemini 3.5 Flash (Medium)"). Default to the strongest
+  // Gemini 3.1 Pro tier — the loop's adversarial seat (and rescue) want max reasoning,
+  // and we deliberately pick a GEMINI model (not agy's Claude/GPT-OSS options) so the
+  // adversarial panel keeps genuine cross-vendor diversity. Overridable per-call via
+  // request.model, or host-wide via GEMINI_COMPANION_MODEL. spawn(argv) passes the
+  // label literally (no shell), so the spaces/parens are safe.
+  const model = request.model || process.env.GEMINI_COMPANION_MODEL || "Gemini 3.1 Pro (High)";
+  args.push("--model", model);
   if (request.sandbox) {
     args.push("--sandbox");
   }
