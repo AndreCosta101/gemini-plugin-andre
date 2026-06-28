@@ -8,8 +8,17 @@ user-invocable: false
 
 Use this skill only inside the `gemini:gemini-rescue` subagent.
 
-Primary helper:
-- `node "${CLAUDE_PLUGIN_ROOT}/scripts/gemini-companion.mjs" task "<raw arguments>"`
+Primary helper — ALWAYS pass the prompt on stdin via a SINGLE-QUOTED heredoc, NEVER as a positional or quoted command-line argument:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/gemini-companion.mjs" task [--write] [--model <model>] [--resume-last] [--background] <<'GEMINI_TASK_EOF'
+<the user's prompt text, verbatim — may contain backticks, $, =, and quotes>
+GEMINI_TASK_EOF
+```
+
+- Routing flags (`--write`, `--model`, `--resume-last`, `--background`) go on the command line. The prompt goes ONLY in the heredoc body — never on the command line.
+- Why stdin: the prompt is untrusted text. Interpolating it into the command string — even inside double quotes — lets Bash evaluate backtick `` `…` `` as command substitution and `$…` as variable expansion, and breaks on embedded quotes/`=`, producing `exit 127` / `command not found` / `parse error`. A SINGLE-quoted heredoc delimiter (`'GEMINI_TASK_EOF'`) disables ALL shell expansion, so the prompt reaches the script literally. The companion reads it from stdin when no positional prompt is given.
+- Pick a heredoc delimiter that does not appear in the prompt body (the default `GEMINI_TASK_EOF` is safe in practice).
 
 Execution rules:
 - The rescue subagent is a forwarder, not an orchestrator. Its only job is to invoke `task` once and return that stdout unchanged (or stderr with `ERROR:` prefix on failure).
